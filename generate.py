@@ -18,7 +18,7 @@ def load_model(ckpt_path):
     tokenizer.vocab_size = len(tokenizer.stoi)
 
     model = MicroMind(saved_config).to(config["device"])
-    model.load_state_dict(ckpt["model_state"])
+    model.load_state_dict(ckpt["model_state"], strict=False)
     model.eval()
 
     return model, tokenizer

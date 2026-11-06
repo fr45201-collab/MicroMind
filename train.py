@@ -63,6 +63,7 @@ def main():
     # ---- Training loop ----
     print(f"[train] training for {config['max_iters']} iterations on {config['device']}")
     t0 = time.time()
+    
     for it in range(config["max_iters"]):
 
         # Update LR (warmup + cosine decay)
@@ -82,6 +83,17 @@ def main():
                 f"{elapsed:6.1f}s"
             )
 
+            # Save intermediate checkpoint every 500 iterations (except iter 0)
+            if it > 0 and it % 500 == 0:
+                ckpt_path = f"checkpoints/model_iter_{it}.pt"
+                torch.save({
+                    "model_state": model.state_dict(),
+                    "config": config,
+                    "stoi": tokenizer.stoi,
+                    "itos": tokenizer.itos,
+                }, ckpt_path)
+                print(f"  --> [saved checkpoint: {ckpt_path}]")
+
         # Forward + backward + step
         x, y = get_batch("train", train_data, val_data)
         _, loss = model(x, y)
@@ -91,7 +103,7 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
         optimizer.step()
 
-    # ---- Save checkpoint ----
+    # ---- Save final checkpoint ----
     torch.save(
         {
             "model_state": model.state_dict(),
@@ -101,7 +113,7 @@ def main():
         },
         config["ckpt_path"],
     )
-    print(f"[train] saved checkpoint to {config['ckpt_path']}")
+    print(f"[train] saved final checkpoint to {config['ckpt_path']}")
 
 
 if __name__ == "__main__":

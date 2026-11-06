@@ -22,15 +22,9 @@ class CausalSelfAttention(nn.Module):
         # Output projection back to n_embd
         self.proj = nn.Linear(config["n_embd"], config["n_embd"], bias=False)
 
-        self.attn_dropout = nn.Dropout(config["dropout"])
+        # We keep dropout as a float for the SDPA call, and as a layer for the output
+        self.attn_dropout_p = config["dropout"]
         self.resid_dropout = nn.Dropout(config["dropout"])
-
-        # Causal mask: lower-triangular matrix of ones (T, T)
-        self.register_buffer(
-            "mask",
-            torch.tril(torch.ones(config["context_length"], config["context_length"]))
-            .view(1, 1, config["context_length"], config["context_length"]),
-        )
 
     def forward(self, x):
         B, T, C = x.shape
@@ -44,14 +38,15 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
-        # Scaled dot-product attention
-        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B, nh, T, T)
-        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
+        # 🚀 THE UPGRADE: PyTorch's fused attention kernel
+        # is_causal=True automatically applies the lower-triangular mask
+        y = F.scaled_dot_product_attention(
+            q, k, v, 
+            dropout_p=self.attn_dropout_p if self.training else 0.0,
+            is_causal=True
+        )
 
         # Apply attention to values
-        y = att @ v                                   # (B, nh, T, head_dim)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         return self.resid_dropout(self.proj(y))
