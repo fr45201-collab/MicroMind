@@ -4,13 +4,14 @@ config = {
     # ---- Model architecture ----
     "vocab_size": 106,     # TinyStories has 106 chars (was 65). Overwritten by train.py anyway.
     "context_length": 128, # Max tokens the model can attend to
-    "n_embd": 192,         # Embedding dimension
-    "n_head": 6,           # Attention heads
-    "n_layer": 6,          # Transformer blocks
+    "n_embd": 256,         # Embedding dimension
+    "n_head": 8,           # Attention heads
+    "n_layer": 8,          # Transformer blocks
     "dropout": 0.1,        # Regularization
 
     # ---- Training ----
     "batch_size": 32,
+    "gradient_accumulation_steps": 4,
     "learning_rate": 3e-4,
     "max_iters": 4000,     # More iters for bigger dataset (was 2500)
     "eval_interval": 250,

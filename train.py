@@ -62,8 +62,11 @@ def main():
 
     # ---- Training loop ----
     print(f"[train] training for {config['max_iters']} iterations on {config['device']}")
-    t0 = time.time()
+    print(f"[train] effective batch size: {config['batch_size'] * config['gradient_accumulation_steps']}")
     
+    t0 = time.time()
+    accum_steps = config["gradient_accumulation_steps"]
+
     for it in range(config["max_iters"]):
 
         # Update LR (warmup + cosine decay)
@@ -94,14 +97,19 @@ def main():
                 }, ckpt_path)
                 print(f"  --> [saved checkpoint: {ckpt_path}]")
 
-        # Forward + backward + step
-        x, y = get_batch("train", train_data, val_data)
-        _, loss = model(x, y)
-
+        # --- GRADIENT ACCUMULATION START ---
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        
+        for _ in range(accum_steps):
+            x, y = get_batch("train", train_data, val_data)
+            _, loss = model(x, y)
+            # Scale loss to average out the accumulation
+            loss = loss / accum_steps
+            loss.backward()
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), config["grad_clip"])
         optimizer.step()
+        # --- GRADIENT ACCUMULATION END ---
 
     # ---- Save final checkpoint ----
     torch.save(

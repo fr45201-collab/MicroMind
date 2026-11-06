@@ -6,6 +6,19 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
+class RMSNorm(nn.Module):
+    """LLaMA-style Root Mean Square Layer Normalization."""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # Calculate RMS and normalize
+        norm_x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return norm_x * self.weight
+
+
 class CausalSelfAttention(nn.Module):
     """Multi-head causal self-attention."""
 
@@ -39,7 +52,6 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
         # 🚀 THE UPGRADE: PyTorch's fused attention kernel
-        # is_causal=True automatically applies the lower-triangular mask
         y = F.scaled_dot_product_attention(
             q, k, v, 
             dropout_p=self.attn_dropout_p if self.training else 0.0,
@@ -52,20 +64,25 @@ class CausalSelfAttention(nn.Module):
         return self.resid_dropout(self.proj(y))
 
 
-class FeedForward(nn.Module):
-    """Position-wise MLP: Linear -> GELU -> Linear."""
-
+class SwiGLU(nn.Module):
+    """LLaMA-style FeedForward using SwiGLU activation."""
     def __init__(self, config):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(config["n_embd"], 4 * config["n_embd"]),
-            nn.GELU(),
-            nn.Linear(4 * config["n_embd"], config["n_embd"]),
-            nn.Dropout(config["dropout"]),
-        )
+        n_embd = config["n_embd"]
+        # SwiGLU uses 2/3 of the standard 4x multiplier to keep params efficient
+        hidden_dim = int(8 * n_embd / 3)
+        # Round to nearest multiple of 256 for hardware efficiency
+        hidden_dim = 256 * ((hidden_dim + 255) // 256)
+
+        self.w1 = nn.Linear(n_embd, hidden_dim, bias=False) # Gate
+        self.w2 = nn.Linear(hidden_dim, n_embd, bias=False) # Down
+        self.w3 = nn.Linear(n_embd, hidden_dim, bias=False) # Up
+        
+        self.dropout = nn.Dropout(config["dropout"])
 
     def forward(self, x):
-        return self.net(x)
+        # Swish(x) * Gate(x) -> w2
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
 
 class Block(nn.Module):
@@ -73,10 +90,10 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln1 = nn.LayerNorm(config["n_embd"])
+        self.ln1 = RMSNorm(config["n_embd"])
         self.attn = CausalSelfAttention(config)
-        self.ln2 = nn.LayerNorm(config["n_embd"])
-        self.ffn = FeedForward(config)
+        self.ln2 = RMSNorm(config["n_embd"])
+        self.ffn = SwiGLU(config)
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))   # residual around attention
@@ -96,7 +113,7 @@ class MicroMind(nn.Module):
         self.drop = nn.Dropout(config["dropout"])
 
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config["n_layer"])])
-        self.ln_f = nn.LayerNorm(config["n_embd"])
+        self.ln_f = RMSNorm(config["n_embd"])
         self.head = nn.Linear(config["n_embd"], config["vocab_size"], bias=False)
 
         # Weight tying: output head shares weights with token embedding
